@@ -2,7 +2,7 @@
 A mapping software that generate individual maps(orthophotos) from drone images.
 Only with images(and sensory data), you can generate orthophotos of area of interests.
 
-![dg_result](figure/dg_result.gif)
+<!-- ![dg_result](figure/dg_result.gif) -->
 
 Steps:
 1. Georeferencing: determine **<u>camera pose(position: x, y, z; orientation: ω, φ, κ)</u>** and **<u>3D coordinates(x, y, z)</u>**

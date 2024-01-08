@@ -14,6 +14,13 @@ import shutil
 from .colmap.read_write_model import read_model, write_model, qvec2rotmat, rotmat2qvec
 import pandas as pd
 
+import sys
+sys.path.append('/source/OpenSfM')
+from opensfm import dataset
+from opensfm import commands
+from argparse import Namespace
+from PIL import Image
+
 console = Console()
 
 
@@ -112,88 +119,153 @@ def direct_georeferencing(image_path, sensor_width, epsg):
     IO["pixel_size"] = pixel_size
     IO["focal_length"] = focal_length
 
-    console.print(
-        f"EOP: {eo[0]:.2f} | {eo[1]:.2f} | {eo[2]:.2f} | {eo[3]:.2f} | {eo[4]:.2f} | {eo[5]:.2f}\n"
-        f"Focal Length: {focal_length * 1000:.2f} mm, Maker: {maker}",
-        style="blink bold red underline")
+    # console.print(
+    #     f"EOP: {eo[0]:.2f} | {eo[1]:.2f} | {eo[2]:.2f} | {eo[3]:.2f} | {eo[4]:.2f} | {eo[5]:.2f}\n"
+    #     f"Focal Length: {focal_length * 1000:.2f} mm, Maker: {maker}",
+    #     style="blink bold red underline")
 
     return restored_image, EO, IO
 
-
-def lba_opensfm(images_path, target_image_path, sensor_width, epsg):
-    root = '/source/OpenSfM'
-    exec = os.path.join(root, 'bin/opensfm')
-
-    image = cv2.imread(target_image_path, -1)
-
-    # from pyproj import CRS
-    # crs = CRS.from_epsg(5186)
-    # proj = crs.to_proj4()
-    proj = '+proj=tmerc +lat_0=38 +lon_0=127 +k=1 +x_0=200000 +y_0=600000 +ellps=GRS80 +units=m +no_defs'
-
-    # 1. extract_metadata
-    print(f"\n\n********************\n* extract_metadata *\n********************")
-    subprocess.run([exec, 'extract_metadata', images_path])
-    # 2. detect_features
-    print(f"\n\n*******************\n* detect_features *\n*******************")
-    subprocess.run([exec, 'detect_features', images_path])
-    # 3. match_features
-    print(f"\n\n******************\n* match_features *\n******************")
-    subprocess.run([exec, 'match_features', images_path])
-    # 4. create_tracks
-    print(f"\n\n*****************\n* create_tracks *\n*****************")
-    subprocess.run([exec, 'create_tracks', images_path])
-    # 5. reconstruct
-    print(f"\n\n***************\n* reconstruct *\n***************")
-    subprocess.run([exec, 'reconstruct', images_path])
+def lba_opensfm(images_path, target_image_path, sensor_width=6.16, epsg=5186):
+    data = dataset.DataSet(images_path)
     
+    # Create a Namespace object for command line arguments
+    args = Namespace(
+        dataset=images_path, 
+        algorithm='incremental', 
+        reconstruction='reconstruction.json',
+        reconstruction_index=0,
+        tracks='tracks.csv',
+        # output='geo_coords.json',
+        output= 'undistorted',
+        # output=os.path.join('undistorted', 'geo_coords.json'),
+        skip_images=False,
+        subfolder='undistorted',
+        interactive=False,
+
+        proj='+proj=tmerc +lat_0=38 +lon_0=127 +k=1 +x_0=200000 +y_0=600000 +ellps=GRS80 +units=m +no_defs',
+        transformation=False,  # 좌표 변환 매트릭스를 출력하려면 True로 설정
+        image_positions=False,  # 이미지 위치를 내보내려면 True로 설정
+        # reconstruction=True,  # reconstruction.json을 내보내려면 True로 설정
+        dense=False,  # 밀도가 높은 포인트 클라우드를 내보내려면 True로 설정
+        # output=None,  # 출력 파일의 경로 (데이터셋에 상대적). 필요한 경우 설정
+        no_cameras=False,  # 카메라 위치를 저장하지 않는 경우를 위한 값
+        no_points=False,  # 포인트를 저장하지 않는 경우를 위한 값
+        depthmaps=False,  # 이미지별 깊이 맵을 포인트 클라우드로 내보내는 경우를 위한 값
+        point_num_views=False,  # 각 포인트와 연관된 관찰 수를 내보내는 경우를 위한 값
+    )
+
+    # extract_metadata
+    print("Starting extract_metadata...")
+    start_time = time.time()
+    commands.extract_metadata.Command().run(data, args)
+    print(f"Finished extract_metadata in {time.time() - start_time:.2f} seconds.\n")
+
+    # detect_features
+    print("Starting detect_features...")
+    start_time = time.time()
+    commands.detect_features.Command().run(data, args)
+    print(f"Finished detect_features in {time.time() - start_time:.2f} seconds.\n")
+
+    # match_features
+    print("Starting match_features...")
+    start_time = time.time()
+    commands.match_features.Command().run(data, args)
+    print(f"Finished match_features in {time.time() - start_time:.2f} seconds.\n")
+
+    # create_tracks
+    print("Starting create_tracks...")
+    start_time = time.time()
+    commands.create_tracks.Command().run(data, args)
+    print(f"Finished create_tracks in {time.time() - start_time:.2f} seconds.\n")
+
+    # reconstruct
+    print("Starting reconstruct...")
+    start_time = time.time()
+    commands.reconstruct.Command().run(data, args)
+    print(f"Finished reconstruct in {time.time() - start_time:.2f} seconds.\n")
+
     # Query points by track_id in target_image
     query_points(os.path.join(images_path, "reconstruction.json"), 
                 os.path.join(images_path, "tracks.csv"), os.path.basename(target_image_path))
 
-    # 6. export_geocoords
-    # --transformation: geocoords_transformation.txt
-    # --image-positions: image_geocoords.tsv
-    # --reconstruction: reconstruction.geocoords.json
-    print(f"\n\n********************\n* export_geocoords - EOP *\n********************")
-    subprocess.run([exec, 'export_geocoords', '--proj', proj, '--image-positions', images_path])  # position
-    subprocess.run([exec, 'export_colmap', images_path])  # orientation    
+    # export_geocoords for Image Positions
+    print("Starting export_geocoords for Image Positions...")
 
-    print(f"\n\n********************\n* export_geocoords - GP *\n********************")
-    subprocess.run([exec, 'export_geocoords', '--proj', proj, '--reconstruction', images_path])
+    args.output = os.path.join(images_path, 'image_geocoords.tsv')
+    args.proj = '+proj=tmerc +lat_0=38 +lon_0=127 +k=1 +x_0=200000 +y_0=600000 +ellps=GRS80 +units=m +no_defs'
+    args.image_positions = True 
+    args.reconstruction = False
+
+    start_time = time.time()
+    commands.export_geocoords.Command().run(data, args)
+    print(f"Finished export_geocoords for Image Positions in {time.time() - start_time:.2f} seconds.\n")
+
+    # export_colmap
+    print("Starting export_colmap...")
+    # I'm assuming you have a 'binary' parameter in your export_colmap.Command() class, 
+    # if not, please remove the next line.
+    args.binary = False
+    commands.export_colmap.Command().run(data, args)
+    print("Finished export_colmap.\n")
+
+    # export_geocoords for Reconstruction
+    print("Starting export_geocoords for Reconstruction...")
+    args.output = os.path.join(images_path, 'reconstruction.geocoords.json')
+    args.image_positions = False
+    args.reconstruction = True
+
+    start_time = time.time()
+    commands.export_geocoords.Command().run(data, args)
+    print(f"Finished export_geocoords for Reconstruction in {time.time() - start_time:.2f} seconds.\n")
+
+    # Rename the generated geocoords reconstruction file
     shutil.move(os.path.join(images_path, 'reconstruction.geocoords.json'), 
                 os.path.join(images_path, 'reconstruction.json'))
-    print(f"\n\n********************\n* export_ply *\n********************")
-    subprocess.run([exec, 'export_ply', '--no-cameras', images_path])
 
-    # 7. TODO: Override exif - exif_overrides.json in images_path
-    # example:
-    # {
-    #     "image_name.jpg": {
-    #         "gps": {
-    #             "latitude": 52.51891,
-    #             "longitude": 13.40029,
-    #             "altitude": 27.0,
-    #             "dop": 5.0
-    #         }
-    #     }
-    # }
-    # should replace data["image_name.jpg"]["gps"]["latitude"] to computed latitude
+
+    # export_ply
+    print("Starting export_ply...")
+    args.no_cameras = True
+    start_time = time.time()
+    commands.export_ply.Command().run(data, args)
+    print(f"Finished export_ply in {time.time() - start_time:.2f} seconds.\n")
+
+    # #TODO: Override exif - exif_overrides.json in data_path
+    # # example:
+    # # {
+    # #     "image_name.jpg": {
+    # #         "gps": {
+    # #             "latitude": 52.51891,
+    # #             "longitude": 13.40029,
+    # #             "altitude": 27.0,
+    # #             "dop": 5.0
+    # #         }
+    # #     }
+    # # }
+    # # should replace data["image_name.jpg"]["gps"]["latitude"] to computed latitude
 
     focal_length, orientation, _, _ = get_metadata(target_image_path)  # unit: m, _, ndarray
-    image_rows, image_cols, _ = image.shape
+    
+    with Image.open(target_image_path) as img:
+        image_data = np.array(img)
+        image_cols, image_rows = img.size
+
     pixel_size = sensor_width / image_cols / 1000  # unit: m/px
     
     pos, R = eo_from_opensfm_colmap(images_path)
-
+    print("pos:", pos)
+    print("R:", R)
+    pos = np.array(pos)
     EO, IO = {}, {}
     EO["eo"] = pos
     EO["rotation_matrix"] = R
     IO["pixel_size"] = pixel_size
     IO["focal_length"] = focal_length
-
-    return image, EO, IO
-
+    print("EO:", EO)
+    print("IO:", IO)
+    
+    return image_data, EO, IO
 
 if __name__ == "__main__":
     lba_opensfm(images_path='data/yangpyeong', sensor_width=6.3)
